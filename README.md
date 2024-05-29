@@ -17,7 +17,6 @@ This repository contains a script to download files from Telegram channels and g
 - Python 3.10.x recommended (feel free to try and test other Python versions)
 - Telethon library
 - tqdm library
-- telethob library
 
 ## Installation
 

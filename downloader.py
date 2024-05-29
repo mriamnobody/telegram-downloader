@@ -5,6 +5,7 @@ from telethon.tl.functions.messages import GetHistoryRequest
 from telethon.tl.types import MessageMediaDocument, DocumentAttributeFilename
 import asyncio
 import re
+import time
 
 # Function to sanitize filenames
 def sanitize_filename(filename):
@@ -144,13 +145,31 @@ async def list_and_download_files():
         print(f"\nTotal number of files to download: {len(selected_files)}")
         print(f"\nTotal size of download: {total_selected_size_mb:.2f} MB ({total_selected_size_gb:.2f} GB)\n")
 
-        download_path = input("Enter the download path: ").strip().strip('\'"')
+        while True:
+            try:
+                concurrency_limit = int(input("Enter the number of files to download concurrently (4 is recommended): "))
+                if concurrency_limit < 1:
+                    print("Concurrency limit must be at least 1.")
+                else:
+                    break
+            except ValueError:
+                print("Invalid input. Please enter a number.")
+
+        download_path = input("\nEnter the download path: ").strip().strip('\'"')
         os.makedirs(download_path, exist_ok=True)
 
-        semaphore = asyncio.Semaphore(4)
+        semaphore = asyncio.Semaphore(concurrency_limit)
+
+        start_time = time.time()
         tasks = [download_file(selected_file[0], selected_file[1], channel.entity, semaphore, download_path)
                  for selected_file in selected_files]
         await asyncio.gather(*tasks)
+        end_time = time.time()
+
+        total_time_taken = end_time - start_time
+        print(f"\nTotal files downloaded: {len(selected_files)}")
+        print(f"Total data downloaded: {total_selected_size_mb:.2f} MB ({total_selected_size_gb:.2f} GB)")
+        print(f"Total time taken: {total_time_taken:.2f} seconds")
 
     except Exception as e:
         print(f"Error accessing channel or downloading files: {e}")

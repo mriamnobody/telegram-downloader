@@ -11,6 +11,9 @@ This repository contains a script to download files from Telegram channels and g
 - Downloads selected files concurrently.
 - Skips downloading files that already exist locally with the same size.
 - Provides download speed information.
+- Ensures the configuration file is saved in all scenarios except when an `errors.ApiIdInvalidError` is raised.
+- Handles invalid channel selection inputs by re-prompting the user to enter a valid channel number.
+- Allows for previous session reuse to avoid repeated logins.
 
 ## Requirements
 
@@ -38,15 +41,25 @@ This repository contains a script to download files from Telegram channels and g
     python downloader.py
     ```
 
-2. When prompted, enter your Telegram API ID and API hash. You can obtain these from [my.telegram.org](https://my.telegram.org).
+2. Follow the prompts:
 
-3. Enter a name for your session. This will be used to save the session file.
+    - If previous sessions are found, you can choose to reuse a previous login or log in with a new number.
+    - If logging in with a new number, enter your mobile number, API ID, and API hash. You can obtain these from [my.telegram.org](https://my.telegram.org).
+    - Enter the name for your session. This will be used to save the session file.
 
-4. Select the channel or group by its number from the listed channels/groups.
+3. After logging in:
 
-5. Enter the file IDs you want to download, or enter `all` to download all files, or enter a range (e.g., `110-120`) to download specific files within that range.
+    - Select the channel or group by its number from the listed channels/groups.
+    - The script will list all media files available in the selected channel or group.
+    - Enter the file IDs you want to download, `all` to download all files, or a range (e.g., `110-120`) to download specific files within that range.
+    - Enter the download path where you want to save the files.
+    - Enter the number of files to download concurrently (recommended: 4).
+    - 
+## Notes
 
-6. Enter the download path where you want to save the files.
+- **Reusing Previous Login**: In case you have successfully logged in once using the script, the next time you start the script, you don't have to enter API details or your mobile number. You can simply select the previous login and start again.
+- **Error Handling with Saved API Details**: The API details are saved so that in case of any error while logging in, such as entering the wrong mobile number or incorrect login code, you won't have to enter the API details again next time. You only have to enter your mobile number, and the script will look for the configuration details associated with that number.
+- **Session File Management**: The Telethon library saves a session file (named as `mobile_number.session` where your mobile number is used to name the session file). This file allows you to start downloading files without logging in again if you have logged in successfully once. The script handles situations where the session file is created even if the login was unsuccessful, ensuring that the session file is only used if the login was successful.
 
 ## Script Details
 
@@ -55,6 +68,8 @@ This repository contains a script to download files from Telegram channels and g
 - **Sanitizing Filenames**: The script sanitizes filenames to ensure they are valid on your file system.
 - **Concurrent Downloads**: The script uses asyncio and semaphores to download multiple files concurrently.
 - **Skip Existing Files**: If a file with the same name and size already exists locally, the script will skip downloading it again.
+- **Configuration Handling**: The script ensures the configuration file is saved in all scenarios except when an `errors.ApiIdInvalidError` is raised.
+- **Input Validation**: The script handles invalid inputs for channel selection and file ID selections by re-prompting the user.
 
 ## Credits
 

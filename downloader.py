@@ -1,11 +1,38 @@
 import os
+import re
+import json
+import time
+import asyncio
 from tqdm import tqdm
-from telethon import TelegramClient
+from telethon import TelegramClient, errors
 from telethon.tl.functions.messages import GetHistoryRequest
 from telethon.tl.types import MessageMediaDocument, DocumentAttributeFilename
-import asyncio
-import re
-import time
+
+# Constants
+CONFIG_DIR = "configurations"
+SESSION_DIR = "sessions"
+
+# Create directories if they don't exist
+os.makedirs(CONFIG_DIR, exist_ok=True)
+os.makedirs(SESSION_DIR, exist_ok=True)
+
+# Function to save API credentials to a configuration file
+def save_config(mobile_number, api_id, api_hash):
+    config_path = os.path.join(CONFIG_DIR, f"{mobile_number}.json")
+    config_data = {
+        "api_id": api_id,
+        "api_hash": api_hash
+    }
+    with open(config_path, 'w') as config_file:
+        json.dump(config_data, config_file)
+
+# Function to load API credentials from a configuration file
+def load_config(mobile_number):
+    config_path = os.path.join(CONFIG_DIR, f"{mobile_number}.json")
+    if os.path.exists(config_path):
+        with open(config_path, 'r') as config_file:
+            return json.load(config_file)
+    return None
 
 # Function to sanitize filenames
 def sanitize_filename(filename):
@@ -13,7 +40,7 @@ def sanitize_filename(filename):
     return re.sub(invalid_chars, '_', filename)
 
 # Function to download a file
-async def download_file(message_id, original_file_name, channel, semaphore, download_path):
+async def download_file(client, message_id, original_file_name, channel, semaphore, download_path):
     async with semaphore:
         try:
             sanitized_file_name = sanitize_filename(original_file_name)
@@ -46,9 +73,9 @@ async def download_file(message_id, original_file_name, channel, semaphore, down
             print(f"Error downloading file {unique_file_name}: {e}")
 
 # Function to list and download files
-async def list_and_download_files():
+async def list_and_download_files(client):
     await client.start()
-    print("Client Created - Listing all channels and groups")
+    print("\nClient Created - Listing all channels and groups\n")
 
     try:
         dialogs = await client.get_dialogs()
@@ -156,12 +183,13 @@ async def list_and_download_files():
                 print("Invalid input. Please enter a number.")
 
         download_path = input("\nEnter the download path: ").strip().strip('\'"')
+        print()
         os.makedirs(download_path, exist_ok=True)
 
         semaphore = asyncio.Semaphore(concurrency_limit)
 
         start_time = time.time()
-        tasks = [download_file(selected_file[0], selected_file[1], channel.entity, semaphore, download_path)
+        tasks = [download_file(client, selected_file[0], selected_file[1], channel.entity, semaphore, download_path)
                  for selected_file in selected_files]
         await asyncio.gather(*tasks)
         end_time = time.time()
@@ -174,12 +202,198 @@ async def list_and_download_files():
     except Exception as e:
         print(f"Error accessing channel or downloading files: {e}")
 
-if __name__ == "__main__":
-    api_id = input("Enter your API ID: ").strip()
-    api_hash = input("Enter your API hash: ").strip()
-    session_name = input("Enter a name for your session: ").strip()
+# Function to start the client with the stored configuration
+async def start_client(mobile_number):
+    config = load_config(mobile_number)
+    if config:
+        api_id = config["api_id"]
+        api_hash = config["api_hash"]
+        session_path = os.path.join(SESSION_DIR, mobile_number)
+        client = TelegramClient(session_path, api_id, api_hash)
+        try:
+            await client.start()
+        except errors.SessionPasswordNeededError:
+            password = input("Two-step verification is enabled. Please enter your password: ")
+            await client.sign_in(password=password)
+        except Exception as e:
+            print(f"An error occurred: {e}")
+            await client.disconnect()
+            os.remove(session_path + ".session")
+            raise e
+        return client
+    else:
+        print("Configuration not found for this mobile number.")
+        return None
 
-    client = TelegramClient(session_name, api_id, api_hash)
-    
-    with client:
-        client.loop.run_until_complete(list_and_download_files())
+# Function to handle login and validation of API credentials
+async def validate_and_save_config(mobile_number, api_id, api_hash):
+    # Ensure api_id is a positive integer
+    while True:
+        if isinstance(api_id, str):
+            api_id = api_id.strip()
+            if not api_id:
+                api_id = input("API ID cannot be left blank. Please enter your API ID: ").strip()
+            else:
+                try:
+                    api_id = int(api_id)
+                    if api_id <= 0:
+                        print("Invalid API ID. It must be a positive integer.")
+                    else:
+                        break
+                except ValueError:
+                    print("API ID cannot contain alphabets. Please enter a valid API ID.")
+        elif isinstance(api_id, int):
+            if api_id <= 0:
+                print("Invalid API ID. It must be a positive integer.")
+                api_id = input("Please enter your API ID: ").strip()
+                continue
+            break
+
+    # Ensure api_hash is a non-empty string
+    while not api_hash:
+        api_hash = input("API hash cannot be left blank. Please enter your API hash: ").strip()
+
+    session_path = os.path.join(SESSION_DIR, mobile_number)
+    client = TelegramClient(session_path, api_id, api_hash)
+    try:
+        await client.start()
+        save_config(mobile_number, api_id, api_hash)
+        return client
+    except errors.ApiIdInvalidError:
+        print("Invalid API ID or API hash.")
+        await client.disconnect()
+        os.remove(session_path + ".session")
+        return None
+    except errors.SessionPasswordNeededError:
+        password = input("Two-step verification is enabled. Please enter your password: ")
+        await client.sign_in(password=password)
+        save_config(mobile_number, api_id, api_hash)
+        return client
+    except Exception as e:
+        print(f"An error occurred: {e}")
+        save_config(mobile_number, api_id, api_hash)
+        await client.disconnect()
+        os.remove(session_path + ".session")
+        return None
+
+# Main function to handle user inputs and sessions
+async def main():
+    session_files = [f for f in os.listdir(SESSION_DIR) if f.endswith('.session')]
+
+    if session_files:
+        print("Previous logins found.")
+        print("1. Use previous login\n2. Login with new number")
+        use_previous = input("\nSelect an option (1/2): ").strip()
+        print()
+
+        if use_previous == '1':
+            print("Available sessions:")
+            for i, session_file in enumerate(session_files, 1):
+                print(f"{i}. {session_file[:-8]}")
+
+            while True:
+                try:
+                    session_index = int(input("\nSelect a session by number: ")) - 1
+                    if session_index < 0 or session_index >= len(session_files):
+                        print("Invalid selection. Please enter a valid session number.")
+                    else:
+                        mobile_number = session_files[session_index][:-8]
+                        client = await start_client(mobile_number)
+                        if client:
+                            break
+                        else:
+                            print("Failed to start client. Check configuration.")
+                except ValueError:
+                    print("Invalid input. Please enter a number.")
+        else:
+            while True:
+                mobile_number = input("Enter your mobile number (with + sign if applicable): ").strip()
+                print(mobile_number)
+                if not mobile_number:
+                    print("Mobile number cannot be blank. Please enter your mobile number.")
+                elif not re.match(r'^\+\d+$', mobile_number):
+                    print("Invalid mobile number. Please enter a valid mobile number.")
+                else:
+                    break
+
+            # Check if configuration exists for the entered mobile number
+            config = load_config(mobile_number)
+            if config:
+                api_id = config["api_id"]
+                api_hash = config["api_hash"]
+                print(f"Found configuration for {mobile_number}.")
+                print(f"Using API ID: {api_id} and API Hash: {api_hash}.")
+                client = await validate_and_save_config(mobile_number, api_id, api_hash)
+                if not client:
+                    print("Failed to start client. Please check your API credentials.")
+            else:
+                while True:
+                    api_id = input("Enter your API ID: ").strip()
+                    if not api_id:
+                        print("API ID cannot be left blank. Please enter your API ID.")
+                    else:
+                        try:
+                            api_id = int(api_id)
+                            if api_id > 0:
+                                break
+                            else:
+                                print("Invalid API ID. It must be a positive integer.")
+                        except ValueError:
+                            print("API ID cannot contain alphabets. Please enter a valid API ID.")
+                api_hash = ""
+                while not api_hash:
+                    api_hash = input("Enter your API hash: ").strip()
+                    if not api_hash:
+                        print("API hash cannot be left blank. Please try again.")
+                client = await validate_and_save_config(mobile_number, api_id, api_hash)
+                if not client:
+                    print("Failed to start client. Please check your API credentials.")
+    else:
+        while True:
+            mobile_number = input("Enter your mobile number (with + sign if applicable): ").strip()
+            if not mobile_number:
+                print("Mobile number cannot be blank. Please enter your mobile number.")
+            elif not re.match(r'^\+\d+$', mobile_number):
+                print("Invalid mobile number. Please enter a valid mobile number.")
+            else:
+                break
+
+        # Check if configuration exists for the entered mobile number
+        config = load_config(mobile_number)
+        if config:
+            api_id = config["api_id"]
+            api_hash = config["api_hash"]
+            print(f"Found configuration for {mobile_number}.")
+            print(f"Using API ID: {api_id} and API Hash: {api_hash}.")
+            client = await validate_and_save_config(mobile_number, api_id, api_hash)
+            if not client:
+                print("Failed to start client. Please check your API credentials.")
+        else:
+            while True:
+                api_id = input("Enter your API ID: ").strip()
+                if not api_id:
+                    print("API ID cannot be left blank. Please enter your API ID.")
+                else:
+                    try:
+                        api_id = int(api_id)
+                        if api_id > 0:
+                            break
+                        else:
+                            print("Invalid API ID. It must be a positive integer.")
+                    except ValueError:
+                        print("API ID cannot contain alphabets. Please enter a valid API ID.")
+            api_hash = ""
+            while not api_hash:
+                api_hash = input("Enter your API hash: ").strip()
+                if not api_hash:
+                    print("API hash cannot be left blank. Please try again.")
+            client = await validate_and_save_config(mobile_number, api_id, api_hash)
+            if not client:
+                print("Failed to start client. Please check your API credentials.")
+
+    if client:
+        async with client:
+            await list_and_download_files(client)
+
+if __name__ == "__main__":
+    asyncio.run(main())
